@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from typing import Any, Iterator
 
 from offboarding.domain.redaction import redact
-from offboarding.persistence.repositories import TraceRepository
+from offboarding.persistence.trace import TraceRepository
 
 
 class Span:

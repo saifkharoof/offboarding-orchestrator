@@ -10,11 +10,9 @@ from __future__ import annotations
 import pytest
 
 from offboarding.persistence.db import connect, initialize
-from offboarding.persistence.repositories import (
-    RunRepository,
-    SideEffectRepository,
-    TraceRepository,
-)
+from offboarding.persistence.runs import RunRepository
+from offboarding.persistence.side_effects import SideEffectRepository
+from offboarding.persistence.trace import TraceRepository
 
 
 @pytest.fixture

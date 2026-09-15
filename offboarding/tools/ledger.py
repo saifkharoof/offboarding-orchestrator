@@ -49,7 +49,7 @@ from offboarding.domain.errors import (
     PermanentToolError,
     SideEffectReconciliationRequired,
 )
-from offboarding.persistence.repositories import SideEffectRepository
+from offboarding.persistence.side_effects import SideEffectRepository
 from offboarding.tools.base import SideEffectingTool, Tool
 
 

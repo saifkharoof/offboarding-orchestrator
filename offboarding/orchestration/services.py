@@ -14,11 +14,9 @@ from dataclasses import dataclass
 from offboarding.llm.factory import build_llm
 from offboarding.llm.provider import LLMProvider
 from offboarding.persistence.db import connect, initialize, resolve_db_path
-from offboarding.persistence.repositories import (
-    RunRepository,
-    SideEffectRepository,
-    TraceRepository,
-)
+from offboarding.persistence.runs import RunRepository
+from offboarding.persistence.side_effects import SideEffectRepository
+from offboarding.persistence.trace import TraceRepository
 from offboarding.tools.base import ToolRegistry
 from offboarding.tools.documents import ArchiveRecordTool, SendExitPaperworkTool
 from offboarding.tools.executor import RetryPolicy, ToolExecutor

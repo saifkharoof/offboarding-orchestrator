@@ -12,7 +12,7 @@ from offboarding.domain.errors import (
 )
 from offboarding.domain.redaction import REDACTED, redact
 from offboarding.domain.run import StepName, StepStatus
-from offboarding.persistence.repositories import SideEffectRepository
+from offboarding.persistence.side_effects import SideEffectRepository
 from offboarding.tools.executor import RetryPolicy
 from offboarding.tools.iam import SimulatedProcessDeath
 from offboarding.tools.providers import ProviderStore

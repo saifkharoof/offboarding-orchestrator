@@ -8,10 +8,14 @@ for *every* call and none of them should be a node's responsibility:
 3. **Idempotency** -- side-effecting calls go through the ledger.
 4. **Trace** -- one row per attempt, including the failed ones.
 
-Retries are implemented here rather than with LangGraph's ``RetryPolicy`` on
-purpose. ``RetryPolicy`` retries invisibly, and the brief requires retry
-information in the trace; a loop we own writes a trace row per attempt, so
-"this succeeded on attempt 3 after two 503s" is readable afterwards.
+The backoff loop itself is `tenacity <https://github.com/jd/tenacity>`_
+(``Retrying``), not LangGraph's ``RetryPolicy``: LangGraph's retries happen
+invisibly around a whole node, and the brief requires retry information in the
+trace. Driving ``Retrying`` ourselves, one attempt at a time, is what lets a
+trace row be written for every attempt -- including the failed ones -- so
+"this succeeded on attempt 3 after two 503s" is readable afterwards. Only
+:class:`TransientToolError` is retried; ``retry_if_exception_type`` is what
+makes that the case, so a permanent failure propagates on the first attempt.
 """
 
 from __future__ import annotations
@@ -19,6 +23,9 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from typing import Any, Callable
+
+from tenacity import Retrying, retry_if_exception_type, stop_after_attempt
+from tenacity import wait_exponential
 
 from offboarding.domain.errors import (
     BudgetExceeded,
@@ -28,24 +35,45 @@ from offboarding.domain.errors import (
     TransientToolError,
 )
 from offboarding.domain.redaction import redact
-from offboarding.persistence.repositories import RunRepository, TraceRepository
+from offboarding.persistence.runs import RunRepository
+from offboarding.persistence.trace import TraceRepository
 from offboarding.tools.base import ToolRegistry
 from offboarding.tools.ledger import SideEffectLedger, build_key
 
 
 @dataclass(frozen=True, slots=True)
 class RetryPolicy:
-    """Exponential backoff settings for transient failures."""
+    """Exponential backoff settings for transient failures.
+
+    Kept as our own small config object rather than exposing tenacity's
+    primitives directly, so callers and tests name ``max_attempts`` and
+    ``initial_backoff`` instead of assembling a ``stop_after_attempt`` /
+    ``wait_exponential`` pair themselves.
+    """
 
     max_attempts: int = 3
     initial_backoff: float = 0.2
     multiplier: float = 2.0
     max_backoff: float = 5.0
 
-    def backoff_for(self, attempt: int) -> float:
-        """Seconds to wait before ``attempt`` + 1 (attempts are 1-based)."""
-        delay = self.initial_backoff * (self.multiplier ** (attempt - 1))
-        return min(delay, self.max_backoff)
+    def build(self, sleep: Callable[[float], None]) -> Retrying:
+        """Build a configured :class:`tenacity.Retrying` for one tool call.
+
+        ``reraise=True`` is what makes exhausting the retries raise the last
+        :class:`TransientToolError` itself rather than tenacity's own
+        ``RetryError`` wrapper, so callers keep catching our exception types.
+        """
+        return Retrying(
+            sleep=sleep,
+            stop=stop_after_attempt(self.max_attempts),
+            wait=wait_exponential(
+                multiplier=self.initial_backoff,
+                exp_base=self.multiplier,
+                max=self.max_backoff,
+            ),
+            retry=retry_if_exception_type(TransientToolError),
+            reraise=True,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,7 +104,8 @@ class ToolExecutor:
         self._runs = runs
         self._trace = trace
         self._policy = policy or RetryPolicy()
-        # Injected so tests do not spend real seconds proving backoff happened.
+        # Injected so tests do not spend real seconds proving backoff happened;
+        # passed straight through to tenacity's Retrying(sleep=...).
         self._sleep = sleep
 
     def execute(
@@ -118,80 +147,85 @@ class ToolExecutor:
                 "operation name for its idempotency key"
             )
 
-        last_error: Exception | None = None
+        retrying = self._policy.build(sleep=self._sleep)
 
-        for attempt in range(1, self._policy.max_attempts + 1):
-            self._check_budget(run_id, step_name, tool_name)
+        for attempt in retrying:
+            with attempt:
+                attempt_number = attempt.retry_state.attempt_number
+                self._check_budget(run_id, step_name, tool_name)
 
-            row = self._trace.start_attempt(
-                run_id, step_name, tool_invoked=tool_name
-            )
-            self._runs.bump_counters(run_id, tool_calls=1)
-
-            try:
-                if tool.spec.side_effecting:
-                    outcome = self._ledger.run_once(
-                        key=build_key(run_id, step_name, operation or ""),
-                        run_id=run_id,
-                        step_name=step_name,
-                        tool=tool,
-                        kwargs=kwargs,
-                    )
-                    result, replayed, reconciled = (
-                        outcome.result,
-                        outcome.replayed,
-                        outcome.reconciled,
-                    )
-                else:
-                    result = tool.call(**kwargs)
-                    replayed = reconciled = False
-
-            except TransientToolError as exc:
-                last_error = exc
-                self._trace.fail_attempt(
-                    row.id,
-                    error_type=type(exc).__name__,
-                    error_message=str(exc),
-                    detail={
-                        "retryable": True,
-                        "attempt": attempt,
-                        "max_attempts": self._policy.max_attempts,
-                    },
+                row = self._trace.start_attempt(
+                    run_id, step_name, tool_invoked=tool_name
                 )
-                if attempt < self._policy.max_attempts:
-                    self._sleep(self._policy.backoff_for(attempt))
-                    continue
-                raise
+                self._runs.bump_counters(run_id, tool_calls=1)
 
-            except (PermanentToolError, SideEffectReconciliationRequired) as exc:
-                self._trace.fail_attempt(
+                try:
+                    if tool.spec.side_effecting:
+                        outcome = self._ledger.run_once(
+                            key=build_key(run_id, step_name, operation or ""),
+                            run_id=run_id,
+                            step_name=step_name,
+                            tool=tool,
+                            kwargs=kwargs,
+                        )
+                        result, replayed, reconciled = (
+                            outcome.result,
+                            outcome.replayed,
+                            outcome.reconciled,
+                        )
+                    else:
+                        result = tool.call(**kwargs)
+                        replayed = reconciled = False
+
+                except TransientToolError as exc:
+                    self._trace.fail_attempt(
+                        row.id,
+                        error_type=type(exc).__name__,
+                        error_message=str(exc),
+                        detail={
+                            "retryable": True,
+                            "attempt": attempt_number,
+                            "max_attempts": self._policy.max_attempts,
+                        },
+                    )
+                    # Re-raise into tenacity: it decides whether this attempt
+                    # number still has retries left (continue the loop) or the
+                    # policy is exhausted (reraise=True re-raises this exact
+                    # exception out of the `for attempt in retrying` loop).
+                    raise
+
+                except (PermanentToolError, SideEffectReconciliationRequired) as exc:
+                    self._trace.fail_attempt(
+                        row.id,
+                        error_type=type(exc).__name__,
+                        error_message=str(exc),
+                        detail={"retryable": False, "attempt": attempt_number},
+                    )
+                    # Not a TransientToolError, so retry_if_exception_type does
+                    # not match it: tenacity re-raises immediately, no retry.
+                    raise
+
+                self._trace.complete_attempt(
                     row.id,
-                    error_type=type(exc).__name__,
-                    error_message=str(exc),
-                    detail={"retryable": False, "attempt": attempt},
+                    detail=redact(
+                        {
+                            "attempt": attempt_number,
+                            "replayed": replayed,
+                            "reconciled": reconciled,
+                            "result": result,
+                        }
+                    ),
                 )
-                raise
+                return ExecutionResult(
+                    result=result,
+                    attempts=attempt_number,
+                    replayed=replayed,
+                    reconciled=reconciled,
+                )
 
-            self._trace.complete_attempt(
-                row.id,
-                detail=redact(
-                    {
-                        "attempt": attempt,
-                        "replayed": replayed,
-                        "reconciled": reconciled,
-                        "result": result,
-                    }
-                ),
-            )
-            return ExecutionResult(
-                result=result,
-                attempts=attempt,
-                replayed=replayed,
-                reconciled=reconciled,
-            )
-
-        # Unreachable: the loop either returns or raises.
-        raise AssertionError(f"retry loop exited without result: {last_error}")
+        # Unreachable: tenacity's Retrying always returns or raises out of the
+        # loop above; nothing falls through to here.
+        raise AssertionError("retry loop exited without result")
 
     # ------------------------------------------------------------------
     # Guards

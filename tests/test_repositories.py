@@ -181,18 +181,6 @@ class TestSideEffectRepository:
         assert record.result == {"document_id": "doc_7"}
         assert record.completed_at is not None
 
-    def test_release_permits_a_fresh_reservation(self, runs, ledger_store):
-        run = runs.create("emp-001")
-        kwargs = {
-            "run_id": run.run_id,
-            "step_name": StepName.REVOKE_ACCESS,
-            "tool_name": "iam.revoke",
-        }
-        ledger_store.try_reserve("k1", **kwargs)
-        ledger_store.release("k1")
-        assert ledger_store.try_reserve("k1", **kwargs) is not None
-
-
 class TestDurability:
     def test_state_survives_closing_every_connection(self, db_path):
         """The restart guarantee at the storage layer.

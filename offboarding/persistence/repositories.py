@@ -530,17 +530,6 @@ class SideEffectRepository:
         """Record the tool call failed in a way that permits a fresh attempt."""
         return self._set_state(key, self.FAILED)
 
-    def release(self, key: str) -> None:
-        """Delete a reservation so the effect may be attempted again.
-
-        Used only when the tool raised a transient error *before* the provider
-        could have acted -- never after an ``in_progress`` row has been written.
-        """
-        self._conn.execute(
-            "DELETE FROM side_effects WHERE idempotency_key = ?", (key,)
-        )
-        self._conn.commit()
-
     def list_for_run(self, run_id: str) -> list[SideEffectRecord]:
         """Return every ledger row for a run."""
         rows = self._conn.execute(

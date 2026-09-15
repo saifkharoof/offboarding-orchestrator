@@ -7,6 +7,9 @@ venv/
 *.db-shm
 *.db-wal
 .pytest_cache/
+.mypy_cache/
 *.egg-info/
 build/
 dist/
+.idea/
+.vscode/

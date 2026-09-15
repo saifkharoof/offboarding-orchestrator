@@ -80,3 +80,25 @@ class SideEffectReconciliationRequired(OrchestratorError):
     with ``FailureReason.NEEDS_RECONCILIATION`` rather than risk firing the
     side effect a second time.
     """
+
+
+# --------------------------------------------------------------------------
+# Control flow
+# --------------------------------------------------------------------------
+
+
+class RunCancelled(OrchestratorError):
+    """A cancellation was requested and the guard stopped the run.
+
+    Control flow rather than failure: the run service catches it and records
+    ``RunStatus.CANCELLED``. Raised by the guard *before* a step does any work,
+    so cancelling never interrupts a side effect mid-flight.
+    """
+
+
+class ApprovalRejected(OrchestratorError):
+    """A human rejected the action at the approval gate.
+
+    Also control flow: the run service records ``RunStatus.FAILED`` with
+    ``FailureReason.APPROVAL_REJECTED``. The high-risk tool is never reached.
+    """

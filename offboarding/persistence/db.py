@@ -109,7 +109,11 @@ def connect(path: str | os.PathLike[str] | None = None) -> sqlite3.Connection:
     if resolved != ":memory:":
         Path(resolved).parent.mkdir(parents=True, exist_ok=True)
 
-    conn = sqlite3.connect(resolved, check_same_thread=False)
+    # isolation_level=None disables the driver's implicit transactions, so the
+    # only transactions that exist are the BEGIN IMMEDIATE blocks we open
+    # ourselves. Without this, the driver holds a transaction open across an
+    # arbitrary stretch of a node and our explicit BEGIN fails.
+    conn = sqlite3.connect(resolved, check_same_thread=False, isolation_level=None)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA busy_timeout = 5000")

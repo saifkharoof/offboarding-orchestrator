@@ -7,8 +7,8 @@ assumption that the model can be wrong:
 * it returns **structured** output, validated by :class:`DeprovisioningPlan`;
 * it may only name systems the HR record actually lists, so the model cannot
   invent a system to revoke;
-* a plan that fails either check is a :class:`PermanentToolError`, which fails
-  the run rather than proceeding on a plan we do not trust.
+* a plan that fails either check is an :class:`InvalidPlan`, which fails the
+  run rather than proceeding on a plan we do not trust.
 
 The model proposes; the schema and the allowlist dispose.
 """
@@ -19,7 +19,7 @@ from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, Field, ValidationError
 
-from offboarding.domain.errors import PermanentToolError
+from offboarding.domain.errors import InvalidPlan
 
 RiskLevel = Literal["low", "medium", "high"]
 
@@ -47,7 +47,7 @@ class LLMProvider(Protocol):
     name: str
 
     def generate_plan(self, employee: dict[str, Any]) -> DeprovisioningPlan:
-        """Return a validated plan, or raise :class:`PermanentToolError`."""
+        """Return a validated plan, or raise :class:`InvalidPlan`."""
         ...
 
 
@@ -57,26 +57,26 @@ def validate_plan(
     """Reject a plan that does not match the employee's actual access.
 
     Raises:
-        PermanentToolError: if the plan is empty, names a system the employee
-            does not have, or omits one they do. Retrying the same prompt is
-            not a fix, so this is permanent by construction.
+        InvalidPlan: if the plan is empty, names a system the employee does
+            not have, or omits one they do. Retrying the same prompt is not a
+            fix, so this is permanent by construction.
     """
     known = set(employee.get("systems", []))
     proposed = {item.system for item in plan.items}
 
     if not plan.items:
-        raise PermanentToolError("the model returned an empty plan")
+        raise InvalidPlan("the model returned an empty plan")
 
     invented = proposed - known
     if invented:
-        raise PermanentToolError(
+        raise InvalidPlan(
             f"plan names systems the employee does not have: "
             f"{sorted(invented)}"
         )
 
     missed = known - proposed
     if missed:
-        raise PermanentToolError(
+        raise InvalidPlan(
             f"plan omits systems the employee still has access to: "
             f"{sorted(missed)}"
         )
@@ -88,7 +88,7 @@ def parse_plan(payload: Any, employee: dict[str, Any]) -> DeprovisioningPlan:
     """Parse and validate raw model output.
 
     Raises:
-        PermanentToolError: if the payload does not fit the schema.
+        InvalidPlan: if the payload does not fit the schema.
     """
     try:
         plan = (
@@ -97,7 +97,7 @@ def parse_plan(payload: Any, employee: dict[str, Any]) -> DeprovisioningPlan:
             else DeprovisioningPlan.model_validate(payload)
         )
     except ValidationError as exc:
-        raise PermanentToolError(
+        raise InvalidPlan(
             f"the model returned a plan that does not fit the schema: {exc}"
         ) from exc
     return validate_plan(plan, employee)

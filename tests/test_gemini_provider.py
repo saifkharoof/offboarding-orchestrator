@@ -14,7 +14,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from offboarding.domain.errors import PermanentToolError, TransientToolError
+from offboarding.domain.errors import (
+    InvalidPlan,
+    PermanentToolError,
+    TransientToolError,
+)
 from offboarding.llm.fake import FakeLLM
 
 EMPLOYEE = {
@@ -121,7 +125,7 @@ class TestGeminiLLM:
             "notes": "",
         }
         interactions._output_text = json.dumps(bad_plan)
-        with pytest.raises(PermanentToolError, match="does not have"):
+        with pytest.raises(InvalidPlan, match="does not have"):
             gemini.GeminiLLM().generate_plan(EMPLOYEE)
 
     def test_malformed_json_is_permanent_not_transient(
@@ -129,7 +133,7 @@ class TestGeminiLLM:
     ):
         gemini, interactions = gemini_module
         interactions._output_text = "not valid json{{"
-        with pytest.raises(PermanentToolError):
+        with pytest.raises(InvalidPlan):
             gemini.GeminiLLM().generate_plan(EMPLOYEE)
 
     def test_transport_failure_is_transient(self, gemini_module):

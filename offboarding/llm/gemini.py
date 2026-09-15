@@ -24,7 +24,11 @@ import json
 import os
 from typing import Any
 
-from offboarding.domain.errors import PermanentToolError, TransientToolError
+from offboarding.domain.errors import (
+    InvalidPlan,
+    PermanentToolError,
+    TransientToolError,
+)
 from offboarding.llm.provider import DeprovisioningPlan, parse_plan
 
 DEFAULT_MODEL = "gemini-3.5-flash-lite"
@@ -97,14 +101,14 @@ class GeminiLLM:
             ) from exc
 
         # json.loads (not model_validate_json) so a malformed response raises
-        # here, in our control, and can be mapped to PermanentToolError -- the
-        # same schema/allowlist validation every provider's output goes
-        # through in parse_plan, rather than a raw pydantic ValidationError
-        # escaping uncaught.
+        # here, in our control, and can be mapped to InvalidPlan -- the same
+        # schema/allowlist validation every provider's output goes through in
+        # parse_plan, rather than a raw pydantic ValidationError escaping
+        # uncaught.
         try:
             payload = json.loads(interaction.output_text)
         except json.JSONDecodeError as exc:
-            raise PermanentToolError(
+            raise InvalidPlan(
                 f"gemini returned a response that is not valid JSON: {exc}"
             ) from exc
 

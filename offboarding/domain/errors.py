@@ -72,6 +72,17 @@ class BudgetExceeded(PermanentToolError):
     """The run hit its maximum step or tool-call budget."""
 
 
+class InvalidPlan(PermanentToolError):
+    """The LLM's checklist failed schema or allowlist validation.
+
+    Covers an unparseable response, an empty plan, or one that names a system
+    the employee does not have or omits one they do. The run service maps this
+    to ``FailureReason.INVALID_PLAN`` specifically, rather than the generic
+    ``TOOL_FAILED``, since the fix here is a prompt or model change, not a
+    retry.
+    """
+
+
 class SideEffectReconciliationRequired(OrchestratorError):
     """A side effect may or may not have landed, and we cannot determine which.
 

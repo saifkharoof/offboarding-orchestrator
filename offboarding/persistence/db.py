@@ -74,6 +74,20 @@ CREATE TABLE IF NOT EXISTS side_effects (
 
 CREATE INDEX IF NOT EXISTS idx_side_effects_run
     ON side_effects(run_id);
+
+-- Stands in for the downstream systems' own storage (the IAM provider, the
+-- document service). It belongs to the *tools*, not to the orchestrator:
+-- nothing outside offboarding/tools/ may read or write it. Persisting it means
+-- a mocked provider can still answer "did this effect land?" after a restart,
+-- which is what makes the reconciliation path demonstrable rather than
+-- theoretical.
+CREATE TABLE IF NOT EXISTS provider_effects (
+    provider        TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    payload         TEXT NOT NULL,
+    created_at      TEXT NOT NULL,
+    PRIMARY KEY (provider, idempotency_key)
+);
 """
 
 

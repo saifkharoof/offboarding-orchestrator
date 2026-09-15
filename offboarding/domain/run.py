@@ -109,6 +109,13 @@ ALLOWED_RUN_TRANSITIONS: dict[RunStatus, frozenset[RunStatus]] = {
 #: Legal step transitions, applied between consecutive trace rows for the same
 #: step. Retries do NOT transition a step: each attempt is its own trace row, so
 #: attempt 2 of ``revoke_access`` starts again at ``RUNNING``.
+#:
+#: ``COMPLETED -> RUNNING`` is legal, which looks surprising. It is required:
+#: LangGraph re-runs a node from the top on resume, so a step that completed a
+#: side effect before pausing genuinely re-enters. Forbidding it here would
+#: break legitimate resumes and, worse, hide the re-entry from the trace. This
+#: table records what happened; it is not the duplicate-side-effect guard. That
+#: guard is the ledger's UNIQUE idempotency key, and it is the only one.
 ALLOWED_STEP_TRANSITIONS: dict[StepStatus, frozenset[StepStatus]] = {
     StepStatus.PENDING: frozenset(
         {StepStatus.RUNNING, StepStatus.SKIPPED}
@@ -125,7 +132,7 @@ ALLOWED_STEP_TRANSITIONS: dict[StepStatus, frozenset[StepStatus]] = {
         {StepStatus.RUNNING, StepStatus.COMPLETED, StepStatus.FAILED}
     ),
     StepStatus.FAILED: frozenset({StepStatus.RUNNING}),  # retried attempt
-    StepStatus.COMPLETED: frozenset(),
+    StepStatus.COMPLETED: frozenset({StepStatus.RUNNING}),  # re-entry on resume
     StepStatus.SKIPPED: frozenset(),
 }
 

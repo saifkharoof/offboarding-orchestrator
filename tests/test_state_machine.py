@@ -27,10 +27,10 @@ class TestRunTransitions:
             status = transition_run(status, target)
         assert status is RunStatus.COMPLETED
 
-    @pytest.mark.parametrize("terminal", sorted(RunStatus))
+    @pytest.mark.parametrize(
+        "terminal", [s for s in RunStatus if is_terminal(s)]
+    )
     def test_terminal_statuses_admit_no_transitions(self, terminal):
-        if not is_terminal(terminal):
-            pytest.skip(f"{terminal} is not terminal")
         assert ALLOWED_RUN_TRANSITIONS[terminal] == frozenset()
 
     def test_completed_run_cannot_be_resumed(self):
@@ -72,8 +72,17 @@ class TestStepTransitions:
             StepStatus.RUNNING
         )
 
-    def test_completed_step_cannot_run_again(self):
-        # This is the state-machine half of duplicate-side-effect protection:
-        # even before the ledger is consulted, a completed step cannot re-enter.
+    def test_completed_step_may_re_enter_on_resume(self):
+        """LangGraph re-runs a node from the top when resuming after interrupt().
+
+        A step that completed a side effect before pausing therefore re-enters
+        legitimately, and the trace must be able to record that. Duplicate
+        protection lives in the ledger, not here -- see TestDuplicateSideEffects.
+        """
+        assert transition_step(StepStatus.COMPLETED, StepStatus.RUNNING) is (
+            StepStatus.RUNNING
+        )
+
+    def test_skipped_step_is_terminal(self):
         with pytest.raises(InvalidStateTransition):
-            transition_step(StepStatus.COMPLETED, StepStatus.RUNNING)
+            transition_step(StepStatus.SKIPPED, StepStatus.RUNNING)

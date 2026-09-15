@@ -109,12 +109,18 @@ class TestTraceRepository:
         # The failure is still visible after the retry succeeds.
         assert rows[0].error_type == "TransientToolError"
 
-    def test_completed_step_cannot_start_another_attempt(self, runs, trace):
+    def test_completed_step_re_entering_opens_a_new_attempt(self, runs, trace):
+        """A resume re-runs the node, so the trace must show the re-entry.
+
+        The previous attempt keeps its COMPLETED status; nothing is overwritten.
+        """
         run = runs.create("emp-001")
         attempt = trace.start_attempt(run.run_id, StepName.REVOKE_ACCESS)
         trace.complete_attempt(attempt.id)
-        with pytest.raises(InvalidStateTransition):
-            trace.start_attempt(run.run_id, StepName.REVOKE_ACCESS)
+
+        reentry = trace.start_attempt(run.run_id, StepName.REVOKE_ACCESS)
+        assert reentry.attempt == 2
+        assert trace.list_for_run(run.run_id)[0].status is StepStatus.COMPLETED
 
     def test_pause_records_reason_and_allows_a_resume_attempt(self, runs, trace):
         run = runs.create("emp-001")

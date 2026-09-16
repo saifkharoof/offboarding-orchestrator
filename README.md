@@ -126,6 +126,21 @@ they format `RunService`'s output and map its exceptions to exit codes / HTTP
 status codes. That's what makes "add a client" or "change the graph" a
 one-file change rather than a rewrite.
 
+### Why LangGraph, not a hand-rolled runner
+
+The workflow itself is a straight line — no branches, no fan-out — so
+LangGraph's node/edge DSL isn't doing much heavy lifting; a linear runner over
+the same seven functions would be maybe 80 lines. What earns its place is
+`interrupt()` / `Command(resume=...)` plus durably tracking which step is next
+across a restart — the one part that's genuinely easy to get subtly wrong by
+hand. That's a bet on the workflow's *likely* shape, not its current one:
+adding a branch or a new pause reason is a one-node change here, versus a
+DAG-routing rewrite from scratch without it. The real cost of the choice is
+the dual-connection workaround in
+[`graph.py`](offboarding/orchestration/graph.py) — `SqliteSaver` holds a
+transaction open across node execution, so our own connection runs in
+autocommit mode purely to make room for it.
+
 ### Two databases, one file — the central decision
 
 ```

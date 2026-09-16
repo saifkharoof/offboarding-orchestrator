@@ -1,9 +1,15 @@
-$ export OFFBOARDING_DB_PATH=./offboarding.db   # unset -> defaults to this anyway
+
+================================================================
+# PART 1 -- full lifecycle via the CLI
+================================================================
+
+# Database: a fresh temp file ($OFFBOARDING_DB_PATH), same as any real deployment.
 
 # 1. Start a run. Fetches the HR record, generates a checklist with the LLM,
 #    and pauses at the first interrupt: HR approval before the high-risk step.
 $ offboarding start emp-001
-run_id       run_b6d3163e7c16
+  (pid: 151628)
+run_id       run_c94f0daeffec
 employee_id  emp-001
 status       paused
 paused_for   hr_approval
@@ -11,43 +17,48 @@ steps        3/20
 tool_calls   1/30
 
 # 2. Inspect it. The trace shows every step so far, including the pause itself.
-$ offboarding trace run_b6d3163e7c16
+$ offboarding trace run_c94f0daeffec
+  (pid: 151640)
 #1  fetch_employee           completed  tool=hr_directory.get_employee
 #1  plan_deprovisioning      completed  tool=llm:fake
 #1  await_hr_approval        paused  pause=hr_approval
 
-# 3. A duplicate approval attempt is refused before it ever reaches the graph --
-#    this is the state check, not the ledger; we have not approved yet.
-$ offboarding sign run_b6d3163e7c16 --document-id doc_too_early
-error: run run_b6d3163e7c16 is paused (hr_approval), not paused for signed_document
-(exit code: 1)
+# 3. A duplicate/out-of-order request is refused before it ever reaches the
+#    graph -- this is the state check in RunService, not the ledger; we have
+#    not approved yet, so signing is not a valid operation on this run.
+$ offboarding sign run_c94f0daeffec --document-id doc_too_early
+  (pid: 151641)
+error: run run_c94f0daeffec is paused (hr_approval), not paused for signed_document
+  (exit code: 1)
 
 # 4. Approve. This revokes access and sends the exit paperwork -- the two
 #    side-effecting steps -- then pauses again waiting for the signed document.
-$ offboarding approve run_b6d3163e7c16 --approver priya.raman --note "Confirmed, last day 9/30."
-run_id       run_b6d3163e7c16
+$ offboarding approve run_c94f0daeffec --approver priya.raman --note Confirmed\,\ last\ day\ 9/30.
+  (pid: 151642)
+run_id       run_c94f0daeffec
 employee_id  emp-001
 status       paused
 paused_for   signed_document
 steps        7/20
 tool_calls   3/30
 
-# 5. THE HARD PART: kill the process here. Every command below is a genuinely
-#    separate OS process -- nothing in memory survives between them.
-$ kill -9 <pid>   # (simulated: each command below is its own fresh process)
-
-# 6. Restart. A brand-new process resumes the same run by signing the document.
-$ offboarding sign run_b6d3163e7c16 --document-id doc_final_signed
-run_id       run_b6d3163e7c16
+# 5. Sign. Note the PID above and the PID below: every command in this
+#    script -- start, trace, approve, sign -- runs as its own OS process.
+#    Nothing about run run_c94f0daeffec lived in memory between any of them; every
+#    fact RunService needed came back from $OFFBOARDING_DB_PATH alone.
+$ offboarding sign run_c94f0daeffec --document-id doc_final_signed
+  (pid: 151645)
+run_id       run_c94f0daeffec
 employee_id  emp-001
 status       completed
 steps        9/20
 tool_calls   4/30
 
-# 7. Full trace after the restart -- note attempt #2 on both pause gates
-#    (interrupt() re-runs the node from the top on every resume), and that
-#    the side-effecting steps below them still show only ONE completed attempt.
-$ offboarding trace run_b6d3163e7c16
+# 6. Full trace. Attempt #2 on both pause gates (interrupt() re-runs the
+#    node from the top on every resume) -- but the side-effecting steps
+#    below them still show exactly ONE completed attempt each.
+$ offboarding trace run_c94f0daeffec
+  (pid: 151651)
 #1  fetch_employee           completed  tool=hr_directory.get_employee
 #1  plan_deprovisioning      completed  tool=llm:fake
 #1  await_hr_approval        paused  pause=hr_approval
@@ -58,27 +69,91 @@ $ offboarding trace run_b6d3163e7c16
 #2  await_signed_document    completed
 #1  finalize                 completed  tool=documents.archive_record
 
-# 8. The idempotency ledger: one row per side effect, each fired exactly once,
-#    regardless of which process was alive when it happened.
-$ offboarding side-effects run_b6d3163e7c16
-revoke_access            completed    key=run_b6d3163e7c16:revoke_access:revoke_all_systems
-send_exit_paperwork      completed    key=run_b6d3163e7c16:send_exit_paperwork:send_packet
-finalize                 completed    key=run_b6d3163e7c16:finalize:archive
+# 7. The idempotency ledger: one row per side effect, each fired exactly
+#    once, regardless of which process was alive when it happened.
+$ offboarding side-effects run_c94f0daeffec
+  (pid: 151652)
+revoke_access            completed    key=run_c94f0daeffec:revoke_access:revoke_all_systems
+send_exit_paperwork      completed    key=run_c94f0daeffec:send_exit_paperwork:send_packet
+finalize                 completed    key=run_c94f0daeffec:finalize:archive
 
-# --- Bonus: retry behaviour, triggered by config alone (no code change) ---
+================================================================
+# PART 2 -- kill -9 a real process, restart, resume
+================================================================
 
-# Make the IAM tool fail twice with a transient error before succeeding.
+# A fresh CLI command starts and exits before you could type a kill
+# command -- there is no PID worth killing mid-flight. The API server is
+# the one long-running process here, so that's what actually dies below.
+
+# Starting the API server in the background.
+$ uvicorn offboarding.api.main:app --port 8799
+  (pid: 151671)
+
+# Starting a run on it.
+$ curl -s -X POST http://localhost:8799/runs -d '{"employee_id": "emp-002"}'
+{
+    "run_id": "run_c88c05ad74f9",
+    "thread_id": "thread_run_c88c05ad74f9",
+    "employee_id": "emp-002",
+    "status": "paused",
+    "created_at": "2026-09-16T18:43:29.698117Z",
+    "updated_at": "2026-09-16T18:43:29.741274Z",
+    "pause_reason": "hr_approval",
+    "failure_reason": null,
+    "failure_detail": null,
+    "cancel_requested": false,
+    "step_count": 3,
+    "tool_call_count": 1,
+    "max_steps": 20,
+    "max_tool_calls": 30
+}
+
+$ kill -9 151671
+$ curl http://localhost:8799/
+  connection: 000 (000 = confirmed dead, this is not a simulation)
+
+# A brand-new server process, same database file, different PID.
+$ uvicorn offboarding.api.main:app --port 8799
+  (pid: 151690 -- was 151671 before the kill; genuinely different)
+
+$ curl http://localhost:8799/runs/run_c88c05ad74f9
+  the new process sees it: status='paused' pause_reason='hr_approval'
+
+# Finish it, on the process that did not start it.
+$ curl -X POST http://localhost:8799/runs/run_c88c05ad74f9/approve -d '{"approver": "aisha.bakr"}'
+$ curl -X POST http://localhost:8799/runs/run_c88c05ad74f9/sign -d '{"document_id": "doc_killed_and_restarted"}'
+  final status: completed
+
+================================================================
+# PART 3 -- retry-then-succeed, no code change
+================================================================
+
+# Make the IAM tool fail transiently twice before succeeding.
 $ export OFFBOARDING_IAM_FAIL_TIMES=2
-$ offboarding approve run_81700cd82434 --approver tom.becker
-run_id       run_81700cd82434
+
+$ offboarding approve run_a56def70fbd2 --approver tom.becker
+  (pid: 151722)
+run_id       run_a56def70fbd2
 employee_id  emp-003
 status       paused
 paused_for   signed_document
 steps        7/20
 tool_calls   5/30
 
-# Attempts 1-2 fail transiently and are retried with backoff; attempt 3 succeeds.
-$ offboarding trace run_81700cd82434 | grep revoke_access
+# Attempts 1-2 fail transiently and are retried with backoff; attempt 3
+# succeeds. Same idempotency key throughout -- one ledger row, not three.
+$ offboarding trace run_a56def70fbd2
+  (pid: 151726)
+#1  fetch_employee           completed  tool=hr_directory.get_employee
+#1  plan_deprovisioning      completed  tool=llm:fake
+#1  await_hr_approval        paused  pause=hr_approval
+#2  await_hr_approval        completed
+#1  revoke_access            failed  tool=iam.revoke_access  error=TransientToolError: iam gateway returned 503 (service unavailable)
+#2  revoke_access            failed  tool=iam.revoke_access  error=TransientToolError: iam gateway returned 503 (service unavailable)
+#3  revoke_access            completed  tool=iam.revoke_access
+#1  send_exit_paperwork      completed  tool=documents.send_exit_paperwork
+#1  await_signed_document    paused  pause=signed_document
+(revoke_access rows only:)
 #1  revoke_access            failed  tool=iam.revoke_access  error=TransientToolError: iam gateway returned 503 (service unavailable)
 #2  revoke_access            failed  tool=iam.revoke_access  error=TransientToolError: iam gateway returned 503 (service unavailable)
 #3  revoke_access            completed  tool=iam.revoke_access
